@@ -1,0 +1,157 @@
+name: Staging workload identity
+on:
+  workflow_dispatch:
+    inputs:
+      workload-identity-id:
+        description: Disposable staging workload identity restricted to this repository and main
+        required: true
+        type: string
+      version:
+        description: Published CLI version
+        default: '0.13.0'
+        type: string
+      sdk-version:
+        description: Published SDK version
+        default: '5.1.0'
+        type: string
+      include-sdks:
+        description: Validate both SDKs and token export after their releases are available
+        default: true
+        type: boolean
+      expected-exchange:
+        description: Expected result (denied proves an archived identity is rejected)
+        default: success
+        type: choice
+        options: [success, denied]
+permissions:
+  contents: read
+concurrency:
+  group: staging-workload-identity
+  cancel-in-progress: false
+jobs:
+  proof:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - id: setup
+        uses: ./
+        continue-on-error: ${{ inputs.expected-exchange == 'denied' }}
+        with:
+          version: ${{ inputs.version }}
+          workload-identity-id: ${{ inputs.workload-identity-id }}
+          api-base-url: https://api.staging.withflintpay.com
+          scope: payments.payment_intents.read
+      - name: Assert expected setup outcome
+        env:
+          EXPECTED: ${{ inputs.expected-exchange }}
+          OUTCOME: ${{ steps.setup.outcome }}
+        run: |
+          if [ "$EXPECTED" = success ]; then test "$OUTCOME" = success; else test "$OUTCOME" = failure; fi
+      - name: Verify CLI authentication and a scoped read without printing customer data
+        if: inputs.expected-exchange == 'success'
+        run: |
+          flint auth status --output json > "$RUNNER_TEMP/flint-context.json"
+          flint payment-intents list --page-size 1 --output json > "$RUNNER_TEMP/flint-read.json"
+          node - <<'JS'
+          const fs = require('node:fs');
+          const c = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/flint-context.json'));
+          if (c.data.auth_type !== 'workload_identity' || c.data.environment !== 'sandbox') process.exit(1);
+          console.log('Released CLI: workload identity auth-context and payment intents read passed');
+          JS
+      - name: Install released SDKs
+        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        env:
+          SDK_VERSION: ${{ inputs.sdk-version }}
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund "@flintpay/node@$SDK_VERSION"
+          composer require --no-interaction --no-scripts --no-plugins "flintpay/flint:$SDK_VERSION"
+      - name: Verify Node default credentials
+        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        run: |
+          node --input-type=module - <<'JS'
+          import assert from 'node:assert/strict';
+          import { Client } from '@flintpay/node';
+          try {
+            assert.equal(process.env.FLINT_ACCESS_TOKEN || '', '');
+            assert.equal(process.env.FLINT_API_KEY || '', '');
+            const client = new Client({baseUrl:'https://api.staging.withflintpay.com'});
+            const context = await client.developer.getAuthContext();
+            assert.equal(context.auth_type, 'workload_identity');
+            assert.equal(context.environment, 'sandbox');
+            await client.paymentIntents.list({page_size:1});
+            console.log('Released Node SDK: automatic GitHub credentials and scoped read passed');
+          } catch { console.error('Node workload identity proof failed'); process.exit(1); }
+          JS
+      - name: Verify PHP default credentials
+        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        run: |
+          php <<'PHP'
+          <?php
+          require 'vendor/autoload.php';
+          try {
+            if (getenv('FLINT_ACCESS_TOKEN') || getenv('FLINT_API_KEY')) throw new RuntimeException();
+            $client = new \Flint\Client(new \Flint\ClientOptions(baseUrl:'https://api.staging.withflintpay.com'));
+            $context = $client->developer->getAuthContext();
+            if ($context->auth_type !== 'workload_identity' || $context->environment !== 'sandbox') throw new RuntimeException();
+            $client->paymentIntents->list(['page_size'=>1]);
+            echo "Released PHP SDK: automatic GitHub credentials and scoped read passed\n";
+          } catch (Throwable $e) { fwrite(STDERR, "PHP workload identity proof failed\n"); exit(1); }
+          PHP
+      - name: Verify opt-in masked token export
+        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        uses: ./
+        with:
+          version: ${{ inputs.version }}
+          workload-identity-id: ${{ inputs.workload-identity-id }}
+          api-base-url: https://api.staging.withflintpay.com
+          scope: payments.payment_intents.read
+          export-access-token: 'true'
+      - name: Assert access token was exported
+        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        run: node -e 'if(!process.env.FLINT_ACCESS_TOKEN?.startsWith("fwat_"))process.exit(1); console.log("Masked access token exported without logging its value")'
+      - name: Reject wrong audience
+        if: inputs.expected-exchange == 'success'
+        id: wrong-audience
+        uses: ./
+        continue-on-error: true
+        with:
+          version: ${{ inputs.version }}
+          workload-identity-id: ${{ inputs.workload-identity-id }}
+          api-base-url: https://api.staging.withflintpay.com
+          audience: https://wrong-audience.example.com
+      - name: Assert wrong audience was rejected
+        if: inputs.expected-exchange == 'success'
+        env:
+          OUTCOME: ${{ steps.wrong-audience.outcome }}
+        run: test "$OUTCOME" = failure
+  missing-permission:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: setup
+        uses: ./
+        continue-on-error: true
+        with:
+          version: ${{ inputs.version }}
+          workload-identity-id: ${{ inputs.workload-identity-id }}
+          api-base-url: https://api.staging.withflintpay.com
+      - name: Assert missing id-token permission was rejected
+        env:
+          OUTCOME: ${{ steps.setup.outcome }}
+        run: test "$OUTCOME" = failure
