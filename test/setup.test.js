@@ -74,6 +74,7 @@ test('exports identity settings and verified context without exporting a token b
   assert.ok(h.events.some(event => event[0] === 'setOutput' && event[1] === 'auth-type' && event[2] === 'workload_identity'));
   assert.equal(h.events.some(event => event[0] === 'setSecret'), false);
   assert.equal(h.calls[0][2].silent, true);
+  assert.deepEqual(h.calls[0][1], ['auth', 'status', '--output', 'json', '--no-input']);
 });
 
 test('verify false supports installation only without credentials', async () => {

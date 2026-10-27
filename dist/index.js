@@ -6106,7 +6106,7 @@ async function run(deps = {}) {
     exportVariable('FLINT_CLI_CREDENTIALS', '0');
   }
   async function cli(args) {
-    const result = await execute(`"${binary.executable}"`, [...args, '--output', 'json', '--no-input', '--base-url', settings.baseUrl], {
+    const result = await execute(`"${binary.executable}"`, [...args, '--output', 'json', '--no-input'], {
       silent: true, ignoreReturnCode: true, env,
     });
     // Neither stdout nor stderr is logged: auth token output contains credentials.
