@@ -43,6 +43,19 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+      - name: Check GitHub subject and audience without printing a token
+        run: |
+          node --input-type=module - <<'JS'
+          const url = new URL(process.env.ACTIONS_ID_TOKEN_REQUEST_URL);
+          url.searchParams.set('audience', 'https://api.staging.withflintpay.com');
+          const r = await fetch(url, {headers:{Authorization:'Bearer '+process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}});
+          const b = await r.json();
+          if (!r.ok || !b.value) process.exit(1);
+          const c = JSON.parse(Buffer.from(b.value.split('.')[1], 'base64url'));
+          const immutable = `repo:${process.env.GITHUB_REPOSITORY_OWNER}@${process.env.GITHUB_REPOSITORY_OWNER_ID}/setup-flint@${process.env.GITHUB_REPOSITORY_ID}:ref:refs/heads/main`;
+          const legacy = `repo:${process.env.GITHUB_REPOSITORY}:ref:refs/heads/main`;
+          console.log(JSON.stringify({audienceMatches:c.aud==='https://api.staging.withflintpay.com',immutableSubject:c.sub===immutable,legacySubject:c.sub===legacy}));
+          JS
       - id: setup
         uses: ./
         continue-on-error: ${{ inputs.expected-exchange == 'denied' }}

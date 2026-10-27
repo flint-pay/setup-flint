@@ -6111,6 +6111,10 @@ async function run(deps = {}) {
     });
     // Neither stdout nor stderr is logged: auth token output contains credentials.
     if (result.exitCode !== 0) {
+      try {
+        const code = JSON.parse(result.stdout).error?.code;
+        if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(code)) actions.error(`Flint CLI error code: ${code}`);
+      } catch {}
       actions.error('Flint authentication failed. Check id-token: write, the workload identity trust conditions, audience, scopes, and API URL.');
       throw new Error('Flint authentication failed');
     }
