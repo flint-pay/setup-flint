@@ -77,7 +77,7 @@ jobs:
             if [ "$command" = context ]; then
               flint auth status --output json > "$RUNNER_TEMP/flint-$command.json" || true
             else
-              flint payment-intents list --page-size 1 --output json > "$RUNNER_TEMP/flint-$command.json" || true
+              flint payment-intents list --page-size 1 --external-reference-id setup-flint-credential-proof-empty --output json > "$RUNNER_TEMP/flint-$command.json" || true
             fi
           done
           node - <<'JS'
@@ -87,6 +87,8 @@ jobs:
             if (result.error) {
               const code = result.error.code;
               console.error(name + ' failed: ' + (/^[A-Z0-9_]+$/.test(code) ? code : 'unknown'));
+              const requestId = result.error.request_id || result.request_id;
+              if (typeof requestId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(requestId)) console.error('request_id=' + requestId);
               process.exit(1);
             }
           }
@@ -114,7 +116,7 @@ jobs:
             const context = await client.developer.getAuthContext();
             assert.equal(context.auth_type, 'workload_identity');
             assert.equal(context.environment, 'sandbox');
-            await client.paymentIntents.list({page_size:1});
+            await client.paymentIntents.list({page_size:1,external_reference_id:'setup-flint-credential-proof-empty'});
             console.log('Released Node SDK: automatic GitHub credentials and scoped read passed');
           } catch { console.error('Node workload identity proof failed'); process.exit(1); }
           JS
@@ -129,7 +131,7 @@ jobs:
             $client = new \Flint\Client(new \Flint\ClientOptions(baseUrl:'https://api.staging.withflintpay.com'));
             $context = $client->developer->getAuthContext();
             if ($context->auth_type !== 'workload_identity' || $context->environment !== 'sandbox') throw new RuntimeException();
-            $client->paymentIntents->list(['page_size'=>1]);
+            $client->paymentIntents->list(['page_size'=>1,'external_reference_id'=>'setup-flint-credential-proof-empty']);
             echo "Released PHP SDK: automatic GitHub credentials and scoped read passed\n";
           } catch (Throwable $e) { fwrite(STDERR, "PHP workload identity proof failed\n"); exit(1); }
           PHP
