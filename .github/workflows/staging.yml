@@ -73,10 +73,23 @@ jobs:
       - name: Verify CLI authentication and a scoped read without printing customer data
         if: inputs.expected-exchange == 'success'
         run: |
-          flint auth status --output json > "$RUNNER_TEMP/flint-context.json"
-          flint payment-intents list --page-size 1 --output json > "$RUNNER_TEMP/flint-read.json"
+          for command in context read; do
+            if [ "$command" = context ]; then
+              flint auth status --output json > "$RUNNER_TEMP/flint-$command.json" || true
+            else
+              flint payment-intents list --page-size 1 --output json > "$RUNNER_TEMP/flint-$command.json" || true
+            fi
+          done
           node - <<'JS'
           const fs = require('node:fs');
+          for (const name of ['context','read']) {
+            const result = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/flint-' + name + '.json'));
+            if (result.error) {
+              const code = result.error.code;
+              console.error(name + ' failed: ' + (/^[A-Z0-9_]+$/.test(code) ? code : 'unknown'));
+              process.exit(1);
+            }
+          }
           const c = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/flint-context.json'));
           if (c.data.auth_type !== 'workload_identity' || c.data.environment !== 'sandbox') process.exit(1);
           console.log('Released CLI: workload identity auth-context and payment intents read passed');
