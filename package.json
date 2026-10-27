@@ -1,0 +1,18 @@
+{
+  "name": "setup-flint",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Install the Flint CLI and configure GitHub Actions workload identity",
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "ncc build src/index.js -o dist --license licenses.txt",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@actions/core": "1.11.1",
+    "@actions/exec": "1.1.1",
+    "@actions/tool-cache": "2.0.2"
+  },
+  "devDependencies": { "@vercel/ncc": "0.38.4" }
+}

@@ -1,0 +1,39 @@
+name: Setup Flint
+description: Install the Flint CLI and authenticate with GitHub Actions workload identity
+author: Flint Pay
+branding:
+  icon: terminal
+  color: orange
+inputs:
+  version:
+    description: CLI version (for example 0.12.0), or latest stable
+    default: latest
+  workload-identity-id:
+    description: Flint workload identity ID (wid_...). Requires id-token write permission
+  federated-credential-id:
+    description: Compatibility alias for workload-identity-id
+  api-base-url:
+    description: Flint API base URL
+    default: https://api.withflintpay.com
+  audience:
+    description: OIDC audience (defaults to the API origin)
+  scope:
+    description: Space-separated scopes to request, within the workload identity scopes
+  verify:
+    description: Verify authentication with flint auth status
+    default: 'true'
+  export-access-token:
+    description: Export a masked short-lived FLINT_ACCESS_TOKEN for later steps
+    default: 'false'
+outputs:
+  flint-version:
+    description: Installed CLI version
+  merchant-id:
+    description: Verified merchant ID (when verify is true)
+  environment:
+    description: Verified Flint environment (when verify is true)
+  auth-type:
+    description: Verified authentication type (when verify is true)
+runs:
+  using: node24
+  main: dist/index.js
