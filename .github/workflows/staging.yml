@@ -8,7 +8,7 @@ on:
         type: string
       version:
         description: Published CLI version
-        default: '0.13.0'
+        default: '0.12.0'
         type: string
       sdk-version:
         description: Published SDK version
@@ -17,6 +17,10 @@ on:
       include-sdks:
         description: Validate both SDKs and token export after their releases are available
         default: true
+        type: boolean
+      auth-only:
+        description: Validate exchange and auth-context only when the staging business database is unavailable
+        default: false
         type: boolean
       expected-exchange:
         description: Expected result (denied proves an archived identity is rejected)
@@ -72,8 +76,11 @@ jobs:
           if [ "$EXPECTED" = success ]; then test "$OUTCOME" = success; else test "$OUTCOME" = failure; fi
       - name: Verify CLI authentication and a scoped read without printing customer data
         if: inputs.expected-exchange == 'success'
+        env:
+          AUTH_ONLY: ${{ inputs.auth-only }}
         run: |
           for command in context read; do
+            if [ "$command" = read ] && [ "$AUTH_ONLY" = true ]; then continue; fi
             if [ "$command" = context ]; then
               flint auth status --output json > "$RUNNER_TEMP/flint-$command.json" || true
             else
@@ -82,7 +89,7 @@ jobs:
           done
           node - <<'JS'
           const fs = require('node:fs');
-          for (const name of ['context','read']) {
+          for (const name of process.env.AUTH_ONLY === 'true' ? ['context'] : ['context','read']) {
             const result = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/flint-' + name + '.json'));
             if (result.error) {
               const code = result.error.code;
@@ -94,7 +101,7 @@ jobs:
           }
           const c = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + '/flint-context.json'));
           if (c.data.auth_type !== 'workload_identity' || c.data.environment !== 'sandbox') process.exit(1);
-          console.log('Released CLI: workload identity auth-context and payment intents read passed');
+          console.log(process.env.AUTH_ONLY === 'true' ? 'Released CLI: workload identity auth-context passed; business read excluded (staging database unavailable)' : 'Released CLI: workload identity auth-context and payment intents read passed');
           JS
       - name: Install released SDKs
         if: inputs.expected-exchange == 'success' && inputs.include-sdks
@@ -105,6 +112,8 @@ jobs:
           composer require --no-interaction --no-scripts --no-plugins "flintpay/flint:$SDK_VERSION"
       - name: Verify Node default credentials
         if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        env:
+          AUTH_ONLY: ${{ inputs.auth-only }}
         run: |
           node --input-type=module - <<'JS'
           import assert from 'node:assert/strict';
@@ -116,12 +125,14 @@ jobs:
             const context = await client.developer.getAuthContext();
             assert.equal(context.auth_type, 'workload_identity');
             assert.equal(context.environment, 'sandbox');
-            await client.paymentIntents.list({page_size:1,external_reference_id:'setup-flint-credential-proof-empty'});
-            console.log('Released Node SDK: automatic GitHub credentials and scoped read passed');
+            if (process.env.AUTH_ONLY !== 'true') await client.paymentIntents.list({page_size:1,external_reference_id:'setup-flint-credential-proof-empty'});
+            console.log(process.env.AUTH_ONLY === 'true' ? 'Released Node SDK: automatic GitHub credentials and auth-context passed; business read excluded' : 'Released Node SDK: automatic GitHub credentials and scoped read passed');
           } catch { console.error('Node workload identity proof failed'); process.exit(1); }
           JS
       - name: Verify PHP default credentials
         if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        env:
+          AUTH_ONLY: ${{ inputs.auth-only }}
         run: |
           php <<'PHP'
           <?php
@@ -131,12 +142,12 @@ jobs:
             $client = new \Flint\Client(new \Flint\ClientOptions(baseUrl:'https://api.staging.withflintpay.com'));
             $context = $client->developer->getAuthContext();
             if ($context->auth_type !== 'workload_identity' || $context->environment !== 'sandbox') throw new RuntimeException();
-            $client->paymentIntents->list(['page_size'=>1,'external_reference_id'=>'setup-flint-credential-proof-empty']);
-            echo "Released PHP SDK: automatic GitHub credentials and scoped read passed\n";
+            if (getenv('AUTH_ONLY') !== 'true') $client->paymentIntents->list(['page_size'=>1,'external_reference_id'=>'setup-flint-credential-proof-empty']);
+            echo getenv('AUTH_ONLY') === 'true' ? "Released PHP SDK: automatic GitHub credentials and auth-context passed; business read excluded\n" : "Released PHP SDK: automatic GitHub credentials and scoped read passed\n";
           } catch (Throwable $e) { fwrite(STDERR, "PHP workload identity proof failed\n"); exit(1); }
           PHP
       - name: Verify opt-in masked token export
-        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        if: inputs.expected-exchange == 'success'
         uses: ./
         with:
           version: ${{ inputs.version }}
@@ -145,7 +156,7 @@ jobs:
           scope: payments.payment_intents.read
           export-access-token: 'true'
       - name: Assert access token was exported
-        if: inputs.expected-exchange == 'success' && inputs.include-sdks
+        if: inputs.expected-exchange == 'success'
         run: node -e 'if(!process.env.FLINT_ACCESS_TOKEN?.startsWith("fwat_"))process.exit(1); console.log("Masked access token exported without logging its value")'
       - name: Reject wrong audience
         if: inputs.expected-exchange == 'success'

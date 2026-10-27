@@ -6072,6 +6072,58 @@ async function install(version, deps = {}) {
   return { directory: extracted, executable };
 }
 
+async function exchangeAccessToken(settings, actions, env, fetcher = fetch) {
+  const url = new URL(env.ACTIONS_ID_TOKEN_REQUEST_URL);
+  if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
+    throw new Error('GitHub OIDC endpoint must use HTTPS.');
+  }
+  url.searchParams.set('audience', settings.audience);
+  const identityResponse = await fetcher(url, {
+    headers: { Authorization: `Bearer ${env.ACTIONS_ID_TOKEN_REQUEST_TOKEN}` },
+    redirect: 'error', signal: AbortSignal.timeout(10000),
+  });
+  if (!identityResponse.ok) throw new Error('GitHub OIDC request failed.');
+  const identity = await identityResponse.json();
+  if (typeof identity.value !== 'string') throw new Error('GitHub did not return an OIDC token.');
+  actions.setSecret(identity.value);
+  const parts = identity.value.split('.');
+  if (parts.length !== 3 || identity.value.length > 8192) throw new Error('Invalid OIDC token.');
+  const claims = JSON.parse(Buffer.from(parts[1], 'base64url'));
+  const audience = Array.isArray(claims.aud) && claims.aud.length === 1 ? claims.aud[0] : claims.aud;
+  if (audience !== settings.audience || !Number.isFinite(claims.exp) || claims.exp <= Date.now() / 1000) {
+    throw new Error('OIDC token audience or lifetime does not match the request.');
+  }
+  const form = new URLSearchParams({
+    grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+    subject_token: identity.value,
+    subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+    requested_token_type: 'urn:ietf:params:oauth:token-type:access_token',
+    workload_identity_id: settings.workloadIdentityId,
+  });
+  if (settings.scope) form.set('scope', settings.scope);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetcher(`${settings.baseUrl}/v1/oauth/token`, {
+      method: 'POST', body: form, headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      redirect: 'error', signal: AbortSignal.timeout(10000),
+    });
+    if (response.ok) {
+      const result = await response.json();
+      if (typeof result.access_token === 'string') actions.setSecret(result.access_token);
+      if (result.token_type?.toLowerCase() !== 'bearer' || !Number.isFinite(result.expires_in) || result.expires_in <= 0 || !/^fwat_[A-Za-z0-9_-]+$/.test(result.access_token || '')) {
+        throw new Error('Invalid workload access token response.');
+      }
+      return result.access_token;
+    }
+    if (attempt === 2 || (response.status !== 429 && response.status < 500)) break;
+    const retry = response.headers.get('retry-after');
+    const milliseconds = retry ? (/^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now()) : 250 * 2 ** attempt;
+    // A long retry window needs a new workflow attempt, rather than retrying early.
+    if (!Number.isFinite(milliseconds) || milliseconds > 10000) break;
+    await new Promise(resolve => setTimeout(resolve, Math.max(0, milliseconds)));
+  }
+  throw new Error('Workload token exchange failed.');
+}
+
 async function run(deps = {}) {
   const actions = deps.core || core;
   const env = deps.env || process.env;
@@ -6133,8 +6185,19 @@ async function run(deps = {}) {
     }
   }
   if (settings.exportToken) {
-    const response = await cli(['auth', 'token']);
-    const token = response.access_token || response.data?.access_token;
+    let token;
+    if (settings.workloadIdentityId) {
+      try { token = await exchangeAccessToken(settings, actions, env, deps.fetch || fetch); }
+      catch {
+        actions.error('Could not export a workload access token. Check OIDC permission, identity trust, audience, scopes, and API availability.');
+        throw new Error('Workload access token export failed');
+      }
+    } else if (env.FLINT_ACCESS_TOKEN) {
+      token = env.FLINT_ACCESS_TOKEN;
+    } else {
+      const response = await cli(['auth', 'token']);
+      token = response.access_token || response.data?.access_token;
+    }
     if (typeof token !== 'string' || !/^(fwat_|fcat_)[A-Za-z0-9_-]+$/.test(token)) {
       actions.error('Flint did not return an exportable access token. API keys cannot be exported.');
       throw new Error('No exportable access token');
@@ -6145,7 +6208,7 @@ async function run(deps = {}) {
   actions.info(`Flint CLI ${version} is ready.`);
 }
 
-module.exports = { options, assetName, verifyChecksum, resolveVersion, install, run };
+module.exports = { options, assetName, verifyChecksum, resolveVersion, install, exchangeAccessToken, run };
 
 
 /***/ }),

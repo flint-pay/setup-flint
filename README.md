@@ -28,14 +28,14 @@ non-secret `wid_...` value, so it can be stored in a GitHub Actions variable.
 
 | Input | Default | Behavior |
 | --- | --- | --- |
-| `version` | `latest` | Install the latest stable CLI or an exact version such as `0.13.0`. `v0.13.0` and `cli/v0.13.0` also work. |
+| `version` | `latest` | Install the latest stable CLI or an exact version such as `0.12.0`. `v0.12.0` and `cli/v0.12.0` also work. |
 | `workload-identity-id` | | Select a Flint workload identity. Requires `permissions: id-token: write`. |
 | `federated-credential-id` | | Compatibility alias for `workload-identity-id`. If both are set, they must match. |
 | `api-base-url` | `https://api.withflintpay.com` | API origin. HTTPS is required except for loopback development URLs. |
 | `audience` | API origin | Audience requested from GitHub. Must match the workload identity audience. |
 | `scope` | | Optional space-separated scopes to narrow the workload identity grant. |
 | `verify` | `true` | Call `flint auth status` and populate the authentication outputs. Set `false` to install without checking authentication. |
-| `export-access-token` | `false` | Export a masked short-lived `FLINT_ACCESS_TOKEN` for later steps. Requires CLI 0.13.0 or later. |
+| `export-access-token` | `false` | Export a masked short-lived `FLINT_ACCESS_TOKEN` for later steps. With a workload identity, uses the OAuth token-exchange endpoint directly. Exporting a saved CLI login requires a CLI release with `flint auth token`. |
 
 When an identity is selected, the action exports `FLINT_WORKLOAD_IDENTITY_ID`,
 `FLINT_OIDC_SOURCE=github_actions`, `FLINT_OIDC_AUDIENCE`, `FLINT_OIDC_SCOPE`, and
@@ -50,7 +50,7 @@ installation alone, set `verify: 'false'`.
 
 | Output | Value |
 | --- | --- |
-| `flint-version` | Installed CLI version, such as `0.13.0`. |
+| `flint-version` | Installed CLI version, such as `0.12.0`. |
 | `merchant-id` | Verified merchant ID. Empty when `verify` is false. |
 | `environment` | Verified Flint environment. Empty when `verify` is false. |
 | `auth-type` | Authentication type, such as `workload_identity`. Empty when `verify` is false. |

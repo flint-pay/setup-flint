@@ -125,3 +125,56 @@ test('runs a downloaded executable whose runner temporary path contains spaces',
     assert.ok(h.events.some(event => event[0] === 'setOutput' && event[1] === 'merchant-id'));
   } finally { await fs.rm(directory, { recursive: true, force: true }); }
 });
+
+const { exchangeAccessToken } = require('../src/setup');
+const jwt = claims => 'synthetic.' + Buffer.from(JSON.stringify({aud:'https://example.com',exp:Math.floor(Date.now()/1000)+300,...claims})).toString('base64url') + '.signature';
+const exchangeSettings = () => options(inputs({'workload-identity-id':'wid_example','api-base-url':'https://example.com',scope:'payments.payment_intents.read'}));
+const response = (body, status=200) => ({ok:status===200,status,headers:new Headers(),json:async()=>body});
+
+test('workload export uses RFC 8693 directly, rejects redirects, and masks both tokens', async () => {
+  const calls=[],masks=[];
+  const subject=jwt({});
+  const token=await exchangeAccessToken(exchangeSettings(),{setSecret:v=>masks.push(v)},oidcEnv(),async(url,options)=>{
+    calls.push({url:String(url),options});
+    return calls.length===1 ? response({value:subject}) : response({access_token:'fwat_synthetic',token_type:'Bearer',expires_in:300});
+  });
+  assert.equal(token,'fwat_synthetic');
+  assert.deepEqual(masks,[subject,'fwat_synthetic']);
+  assert.equal(new URL(calls[0].url).searchParams.get('audience'),'https://example.com');
+  assert.equal(calls[0].options.redirect,'error');
+  assert.equal(calls[1].options.redirect,'error');
+  const body=calls[1].options.body;
+  assert.equal(body.get('subject_token'),subject);
+  assert.equal(body.get('workload_identity_id'),'wid_example');
+  assert.equal(body.get('scope'),'payments.payment_intents.read');
+  assert.equal(body.get('grant_type'),'urn:ietf:params:oauth:grant-type:token-exchange');
+});
+
+test('wrong audience and expired OIDC tokens are never exchanged', async () => {
+  for(const claims of [{aud:'https://wrong.example.com'},{exp:1}]){
+    let calls=0;
+    await assert.rejects(exchangeAccessToken(exchangeSettings(),{setSecret(){}},oidcEnv(),async()=>{calls++;return response({value:jwt(claims)});}));
+    assert.equal(calls,1);
+  }
+});
+
+test('token export retries transient rejection, honors Retry-After, and refuses invalid bearer responses', async () => {
+  let calls=0;
+  const transient={...response({},429),headers:new Headers({'Retry-After':'0'})};
+  const token=await exchangeAccessToken(exchangeSettings(),{setSecret(){}},oidcEnv(),async()=>{calls++;return calls===1?response({value:jwt({})}):calls===2?transient:response({access_token:'fwat_synthetic',token_type:'Bearer',expires_in:300});});
+  assert.equal(calls,3);
+  assert.equal(token,'fwat_synthetic');
+  for(const invalid of [{access_token:'flint_test_synthetic',token_type:'Bearer',expires_in:300},{access_token:'fwat_synthetic',token_type:'Bearer',expires_in:0}]){
+    let n=0;
+    await assert.rejects(exchangeAccessToken(exchangeSettings(),{setSecret(){}},oidcEnv(),async()=>++n===1?response({value:jwt({})}):response(invalid)));
+  }
+});
+
+test('workload export works with CLI 0.12 without invoking auth token', async()=>{
+  const h=harness({version:'0.12.0',verify:'false','workload-identity-id':'wid_example','export-access-token':'true','api-base-url':'https://example.com'});
+  let calls=0;
+  h.deps.fetch=async()=>++calls===1?response({value:jwt({})}):response({access_token:'fwat_synthetic',token_type:'Bearer',expires_in:300});
+  await run(h.deps);
+  assert.equal(h.calls.length,0);
+  assert.equal(h.deps.env.FLINT_ACCESS_TOKEN,'fwat_synthetic');
+});
