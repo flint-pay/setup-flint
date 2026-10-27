@@ -14,6 +14,11 @@ on:
         description: Published SDK version
         default: '5.1.0'
         type: string
+      node-source:
+        description: Install Node from npm or the public SDK release archive
+        default: npm
+        type: choice
+        options: [npm, release-archive]
       include-sdks:
         description: Validate both SDKs and token export after their releases are available
         default: true
@@ -137,8 +142,14 @@ jobs:
         if: inputs.expected-exchange == 'success' && inputs.include-sdks
         env:
           SDK_VERSION: ${{ inputs.sdk-version }}
+          NODE_SOURCE: ${{ inputs.node-source }}
         run: |
-          npm install --ignore-scripts --no-audit --no-fund "@flintpay/node@$SDK_VERSION"
+          if [ "$NODE_SOURCE" = release-archive ]; then
+            node -e 'if (!/^\d+\.\d+\.\d+$/.test(process.env.SDK_VERSION)) process.exit(1)'
+            npm install --ignore-scripts --no-audit --no-fund "https://github.com/flint-pay/flint-sdks/releases/download/v$SDK_VERSION/flintpay-node-$SDK_VERSION.tgz"
+          else
+            npm install --ignore-scripts --no-audit --no-fund "@flintpay/node@$SDK_VERSION"
+          fi
           composer require --no-interaction --no-scripts --no-plugins "flintpay/flint:$SDK_VERSION"
       - name: Verify Node default credentials
         if: inputs.expected-exchange == 'success' && inputs.include-sdks
